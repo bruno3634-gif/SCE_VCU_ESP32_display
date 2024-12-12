@@ -6,6 +6,7 @@
 #include "Adafruit_GFX.h"
 #include "Adafruit_ILI9341.h"
 #include "esp_freertos_hooks.h"
+#include "ESP32_CAN.h"
 
 // Declare a global mutex handle
 
@@ -19,6 +20,9 @@ struct data
   bool readyToDrive;
   bool ignition;
 };
+
+
+TWAI_Interface CAN1(1000,4,5);  //argument 1 - BaudRate,  argument 2 - CAN_TX PIN,  argument 3 - CAN_RX PIN
 
 
 SemaphoreHandle_t xMutex;
@@ -96,8 +100,7 @@ void display_task(void *pvParameters) {
 }
 
 void read_can(void *pvParameters) {
-  while(1) {
-    // Read data from CAN bus
+
     float batteryVoltage = 12.0; // Replace with actual CAN reading logic
     float temperature = 25.0; // Replace with actual CAN reading logic
     float power = 60.0; // Replace with actual CAN reading logic
@@ -105,6 +108,48 @@ void read_can(void *pvParameters) {
     bool readyToDrive = true; // Replace with actual CAN reading logic
     bool ignition = false; // Replace with actual CAN reading logic
     int fan = 50; // Replace with actual CAN reading logic
+    // Read data from CAN bus
+
+  while(1) {
+    int id = 0,send = 1;
+    uint8_t rxmessage[8];
+    do
+    {
+      id = CAN1.RXpacketBegin();
+    } while (id == 0);
+    
+    for (int i = 0; i < 8; i++)
+    {
+      rxmessage[i] = CAN1.RXpacketRead(i);
+    }
+    switch (id)
+    {
+    case 0x14:
+      if (rxmessage[0] == 0x01)
+      {
+        readyToDrive = true;
+      }
+      else{
+        readyToDrive = false;
+      }
+      if(rxmessage[1] == 0x01){
+        ignition = true;
+      }
+      else{
+        ignition = false;
+      }
+      
+      break;
+    case 0x24:
+        
+      break;
+    case 0x54:
+
+      break;
+    default:
+    send = 0;
+      break;
+    }
 
     // Create a SensorData object
     struct data data_received;
