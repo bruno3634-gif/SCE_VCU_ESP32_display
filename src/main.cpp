@@ -8,7 +8,22 @@
 #include "esp_freertos_hooks.h"
 
 // Declare a global mutex handle
+
+struct data
+{
+  float temperature;
+  float batteryVoltage;
+  int power;
+  float brakePressure;
+  int fan;
+  bool readyToDrive;
+  bool ignition;
+};
+
+
 SemaphoreHandle_t xMutex;
+
+QueueHandle_t display_Queue;
 
 #define TFT_DC 2
 #define TFT_CS 15
@@ -41,7 +56,7 @@ void setup() {
   
   // Create the mutex
   xMutex = xSemaphoreCreateMutex();
-  
+  display_Queue = xQueueCreate(10, sizeof(data));
   // Create tasks with increased stack size
   xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 1, NULL, 1); // Pin to core 1
   xTaskCreate(read_can, "read_can", 8192, NULL, 1, NULL);
@@ -57,7 +72,18 @@ void loop() {
 
 void display_task(void *pvParameters) {
   while(1) {
+    struct  data data_received;
     // Attempt to take the mutex
+    if (xQueueReceive(display_Queue, &data_received, portMAX_DELAY) == pdTRUE) {
+      // Update the global variables
+      temperature = data_received.temperature;
+      batteryVoltage = data_received.batteryVoltage;
+      power = data_received.power;
+      brakePressure = data_received.brakePressure;
+      readyToDrive = data_received.readyToDrive;
+      ignition = data_received.ignition;
+      fan = data_received.fan;
+    }
     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
       drawStatus();
       drawGauges();
@@ -71,16 +97,29 @@ void display_task(void *pvParameters) {
 
 void read_can(void *pvParameters) {
   while(1) {
-    // Attempt to take the mutex
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-      // Read CAN bus
-      // Parse CAN message
-      // Update display
-      Serial.println("Reading CAN bus");
-      
-      // Release the mutex
-      xSemaphoreGive(xMutex);
-    }
+    // Read data from CAN bus
+    float batteryVoltage = 12.0; // Replace with actual CAN reading logic
+    float temperature = 25.0; // Replace with actual CAN reading logic
+    float power = 60.0; // Replace with actual CAN reading logic
+    float brakePressure = 50.0; // Replace with actual CAN reading logic
+    bool readyToDrive = true; // Replace with actual CAN reading logic
+    bool ignition = false; // Replace with actual CAN reading logic
+    int fan = 50; // Replace with actual CAN reading logic
+
+    // Create a SensorData object
+    struct data data_received;
+    data_received.batteryVoltage = batteryVoltage;
+    data_received.temperature = temperature;
+    data_received.power = power;
+    data_received.brakePressure = brakePressure;
+    data_received.readyToDrive = readyToDrive;
+    data_received.ignition = ignition;
+    data_received.fan = fan;
+
+    // Send the data to the queue
+    xQueueSend(display_Queue, &data_received, portMAX_DELAY);
+    
+    // Delay to simulate reading interval
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
 }
@@ -95,7 +134,7 @@ void send_can(void *pvParameters) {
       // Release the mutex
       xSemaphoreGive(xMutex);
     }
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
   }
 }
 
@@ -138,20 +177,23 @@ void drawGauges() {
   tft.fillRect(0, 60, tft.width(), tft.height() - 60, ILI9341_BLACK);
 
   // Draw Temperature gauge
-  drawGauge(70, 90, "Temp", temperature);
+  drawGauge(75, 100, " Temp", temperature);
 
   // Draw Battery Voltage gauge
-  drawGauge(220, 90, "Bat Volt", batteryVoltage);
+  drawGauge(220, 100, "Bat Volt", batteryVoltage);
 
   // Draw Power gauge
-  drawGauge(60, 220, "Power", power);
+  drawGauge(75, 200, "Power", power);
 
   // Draw Brake Pressure gauge
-  drawGauge(180, 220, "Br Pr", brakePressure);
+  drawGauge(220, 200, "Br Pr", brakePressure);
 }
 
 void drawGauge(int x, int y, const char* label, int value) {
-  int radius = 55;
+  static float prevValue = -1;
+  static String prevLabel = "";
+
+  int radius = 50;
   int angle = map(value, 0, 100, -180, 0); // Rotate -90 degrees
 
   // Draw the semi-circle gauge frame
@@ -163,19 +205,27 @@ void drawGauge(int x, int y, const char* label, int value) {
     tft.drawLine(x0, y0, x1, y1, ILI9341_WHITE);
   }
 
-  // Draw the value indicator
-  float x2 = x + radius * cos(angle * 3.14 / 180);
-  float y2 = y + radius * sin(angle * 3.14 / 180);
-  tft.drawLine(x, y, x2, y2, ILI9341_RED);
+  // Inside your function, after calculating the current values
+  float currentValue = value;
+  String currentLabel = label;
 
-  // Add gauge label and value
-  //tft.setCursor(x - radius, y + radius + 10);
-  tft.setCursor(x - 60, y);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.print(label);
-  //tft.setCursor(x, y);
-  tft.print(": ");
-  tft.print(value);
-  tft.print("%");
+  // Check if the values have changed
+  if (currentValue != prevValue || currentLabel != prevLabel) {
+    // Update the value indicator
+    float x2 = x + radius * cos(angle * 3.14 / 180);
+    float y2 = y + radius * sin(angle * 3.14 / 180);
+    tft.drawLine(x, y, x2, y2, ILI9341_RED);
+
+    // Add gauge label and value
+    tft.setCursor(x - 60, y + 5);
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setTextSize(2);
+    tft.print(label);
+    tft.print(":");
+    tft.print(value);
+
+    // Update the previous values
+    prevValue = currentValue;
+    prevLabel = currentLabel;
+  }
 }
