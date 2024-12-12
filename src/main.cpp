@@ -16,9 +16,12 @@ Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 
 // Placeholder variables
 bool readyToDrive = false; // Change this value to true/false to test R2D display
+bool ignition = false; // Change this value to true/false to test Ignition display
+int fan = 50; // Example fan percentage value (0-100)
+int temperature = 75; // Example temperature value (0-100)
+int batteryVoltage = 12; // Example battery voltage value (0-100)
+int power = 60; // Example power value (0-100)
 int brakePressure = 50; // Example brake pressure value (0-100)
-int sensorValue = 0;
-int lastAngle = -999; // Initialize with an invalid angle
 
 void display_task(void *pvParameters);
 void read_can(void *pvParameters);
@@ -26,10 +29,9 @@ void send_can(void *pvParameters);
 bool myIdleHook(void);
 
 // Forward declarations for display functions
-void drawGauge(int angle);
-void drawR2D();
-void drawBP();
-void drawWatermark();
+void drawStatus();
+void drawGauges();
+void drawGauge(int x, int y, const char* label, int value);
 
 void setup() {
   Serial.begin(115200);
@@ -57,20 +59,8 @@ void display_task(void *pvParameters) {
   while(1) {
     // Attempt to take the mutex
     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
-      // Analog value read (e.g., from a potentiometer)
-      sensorValue = sensorValue + 10;
-      if(sensorValue > 100){
-        sensorValue = 0;
-      }
-      int angle = map(sensorValue, 0, 100, -90, 10); // Map sensor value to -90 to 90 degrees
-
-      if (angle != lastAngle) {
-        drawGauge(angle);
-        lastAngle = angle;
-      }
-      drawR2D();
-      drawBP();
-      drawWatermark();
+      drawStatus();
+      drawGauges();
       
       // Release the mutex
       xSemaphoreGive(xMutex);
@@ -116,112 +106,76 @@ bool myIdleHook(void) {
   return true; // Return true to keep the hook registered
 }
 
-void drawGauge(int angle) {
-  // Clear only the previous indicator
-  if (lastAngle != -999) {
-    float x2 = 120 + 90 * cos((lastAngle - 50) * 3.14 / 180);
-    float y2 = 240 + 90 * sin((lastAngle - 50) * 3.14 / 180);
-    tft.drawLine(120, 240, x2, y2, ILI9341_BLACK);
-  }
+void drawStatus() {
+  // Clear the status area
+  tft.fillRect(0, 0, tft.width(), 60, ILI9341_BLACK);
 
-  // Draw the semi-circle gauge frame shifted to the left and slightly down
-  int centerX = 120; // Center shifted to the left on the X-axis
-  int centerY = 240; // Center shifted down on the Y-axis
-  int radius = 90; // Radius of the semi-circle
-
-  for (int i = -50; i <= 50; i += 1) {
-    float x0 = centerX + radius * cos((i - 90) * 3.14 / 180);
-    float y0 = centerY + radius * sin((i - 90) * 3.14 / 180);
-    float x1 = centerX + (radius + 10) * cos((i - 90) * 3.14 / 180);
-    float y1 = centerY + (radius + 10) * sin((i - 90) * 3.14 / 180);
-    tft.drawLine(x0, y0, x1, y1, ILI9341_WHITE);
-  }
-
-  // Draw and label the scale markers
-  tft.setCursor(centerX - 90, centerY - 70);
-  tft.print("0");
-
-  tft.setCursor(centerX - 60, centerY - 105);
-  tft.print("25");
-
-  tft.setCursor(centerX - 10, centerY - 120);
-  tft.print("50");
-
-  tft.setCursor(centerX + 50, centerY - 105);
-  tft.print("75");
-
-  tft.setCursor(centerX + 80, centerY - 70);
-  tft.print("100");
-
-  // Draw background for gauge value text
-  int textX = centerX - 25;
-  int textY = centerY - 10;
-  int textWidth = 50;
-  int textHeight = 20;
-  tft.fillRect(textX, textY, textWidth, textHeight, ILI9341_BLACK); // Background color
-
-  // Add gauge value text on top of the background
-  tft.setCursor(textX, textY);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.print(sensorValue);
-
-  // Draw the value indicator
-  float x2 = centerX + radius * cos((angle - 50) * 3.14 / 180);
-  float y2 = centerY + radius * sin((angle - 50) * 3.14 / 180);
-  tft.drawLine(centerX, centerY, x2, y2, ILI9341_RED);
-}
-
-void drawR2D() {
-  int boxSize = 50;
-  int x = 70; // Box position
-  int y = 10;
-
-  // Box color and content
-  uint16_t boxColor = readyToDrive ? ILI9341_GREEN : ILI9341_DARKGREY;
-  const char* text = readyToDrive ? "ON" : "OFF";
-
-  // Add "R2D:" text
-  tft.setCursor(x - 50, y + 15); // Position of "R2D:" text
+  // Draw R2D status
+  tft.setCursor(10, 10);
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
   tft.print("R2D:");
+  tft.print(readyToDrive ? "ON" : "OFF");
 
-  // Draw the box and its content
-  tft.fillRect(x, y, boxSize, boxSize, boxColor); // Corrected function call
-  tft.setCursor(x + 10, y + 20);
+  // Draw Ignition status
+  tft.setCursor(115, 10);
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
-  tft.print(text);
+  tft.print("IGN:");
+  tft.print(ignition ? "ON" : "OFF");
+
+  // Draw Fan percentage
+  tft.setCursor(220, 10);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setTextSize(2);
+  tft.print("Fan:");
+  tft.print(fan);
+  tft.print("%");
 }
 
-void drawBP() {
-  // Update brake pressure value for demonstration
-  brakePressure = (brakePressure + 5) % 101;
+void drawGauges() {
+  // Clear the gauges area
+  tft.fillRect(0, 60, tft.width(), tft.height() - 60, ILI9341_BLACK);
 
-  int barWidth = 30;
-  int barHeight = map(brakePressure, 0, 100, 0, 100); // Height based on BP value
-  int x = 250; // Position of BP box shifted to the left
-  int y = 120 - barHeight; // Fill from bottom to top
+  // Draw Temperature gauge
+  drawGauge(70, 90, "Temp", temperature);
 
-  // Draw the outer frame of the BP box
-  tft.drawRect(x, 20, barWidth, 100, ILI9341_WHITE);
+  // Draw Battery Voltage gauge
+  drawGauge(220, 90, "Bat Volt", batteryVoltage);
 
-  // Draw the inner fill of the BP box
-  tft.fillRect(x, 120 - barHeight, barWidth, barHeight, ILI9341_BLUE);
+  // Draw Power gauge
+  drawGauge(60, 220, "Power", power);
 
-  // Add BP value text
-  tft.setCursor(x - 15, 130); // Position of BP value text shifted to the left
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.print("BP: ");
-  tft.println(brakePressure);
+  // Draw Brake Pressure gauge
+  drawGauge(180, 220, "Br Pr", brakePressure);
 }
 
-void drawWatermark() {
-  // Draw FreeRTOS watermark at the bottom of the display
-  tft.setCursor(10, tft.height() - 20);
+void drawGauge(int x, int y, const char* label, int value) {
+  int radius = 55;
+  int angle = map(value, 0, 100, -180, 0); // Rotate -90 degrees
+
+  // Draw the semi-circle gauge frame
+  for (int i = -180; i <= 0; i += 1) {
+    float x0 = x + radius * cos(i * 3.14 / 180);
+    float y0 = y + radius * sin(i * 3.14 / 180);
+    float x1 = x + (radius + 10) * cos(i * 3.14 / 180);
+    float y1 = y + (radius + 10) * sin(i * 3.14 / 180);
+    tft.drawLine(x0, y0, x1, y1, ILI9341_WHITE);
+  }
+
+  // Draw the value indicator
+  float x2 = x + radius * cos(angle * 3.14 / 180);
+  float y2 = y + radius * sin(angle * 3.14 / 180);
+  tft.drawLine(x, y, x2, y2, ILI9341_RED);
+
+  // Add gauge label and value
+  //tft.setCursor(x - radius, y + radius + 10);
+  tft.setCursor(x - 60, y);
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
-  tft.print("FreeRTOS");
-} 
+  tft.print(label);
+  //tft.setCursor(x, y);
+  tft.print(": ");
+  tft.print(value);
+  tft.print("%");
+}
