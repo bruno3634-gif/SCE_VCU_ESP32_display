@@ -37,7 +37,7 @@ QueueHandle_t emergencyQueue;
 #define TFT_DC 2
 #define TFT_CS 15
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
-
+static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
 // Placeholder variables
 bool readyToDrive = false;
 bool ignition = false;
@@ -50,6 +50,7 @@ int brakePressure = 50;
 void display_task(void *pvParameters);
 void read_can(void *pvParameters);
 void send_can(void *pvParameters);
+void button(void *pvParameters);
 bool myIdleHook(void);
 
 // Forward declarations for display functions
@@ -61,7 +62,7 @@ void drawGauge(int x, int y, const char *label, int value, int maxValue = 100);
 void IRAM_ATTR emergencyISR() {
   // Toggle the emergency variable
   emergency ^= 1;
-  
+  //Serial.println("Emergency button pressed");
   // Send the variable to the queue
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   xQueueSendFromISR(emergencyQueue, &emergency, &xHigherPriorityTaskWoken);
@@ -87,15 +88,16 @@ void setup()
   emergencyQueue = xQueueCreate(10, sizeof(uint8_t));
   
   // Configure pin 16 as input with pulldown resistor
-  pinMode(16, INPUT_PULLDOWN);
+  pinMode(16, INPUT);
   
   // Attach interrupt to pin 16
-  attachInterrupt(digitalPinToInterrupt(16), emergencyISR, CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(16), emergencyISR, FALLING);
   
   // Create tasks with increased stack size
   xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 1, NULL, 1); // Pin to core 1
   xTaskCreate(read_can, "read_can", 8192, NULL, 1, NULL);
   xTaskCreate(send_can, "send_can", 8192, NULL, 1, NULL);
+  xTaskCreate(button, "button", 8192, NULL, 1, NULL);
 
   // Register the custom idle hook
   esp_register_freertos_idle_hook(myIdleHook);
@@ -107,6 +109,20 @@ void loop()
   vTaskDelete(NULL);
   
   // Other loop code...
+}
+
+void button(void *pvParameters){
+
+  while(1){
+    if(digitalRead(16) == HIGH){
+      emergency = 1;
+    }
+    else{
+      emergency = 0;
+    }
+    xQueueSend(emergencyQueue, &emergency, portMAX_DELAY);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+  }
 }
 
 void display_task(void *pvParameters)
@@ -124,10 +140,17 @@ void display_task(void *pvParameters)
       ignition = data_received.ignition;
       fan = data_received.fan;
     }
+    // Critical section
+   // taskENTER_CRITICAL(&spinlock);
+      brakePressure = data_received.brakePressure;
+      readyToDrive = data_received.readyToDrive;
+      ignition = data_received.ignition;
+      fan = data_received.fan;
 
-    drawStatus();
-    drawGauges();
-
+      drawStatus();
+      drawGauges();
+   // taskEXIT_CRITICAL(&spinlock);
+  
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
 }
@@ -219,7 +242,7 @@ void read_can(void *pvParameters)
       }
     }
     xSemaphoreGive(xMutex);
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(50 / portTICK_PERIOD_MS);
   }
 }
 
@@ -280,10 +303,10 @@ void drawGauges()
 {
   tft.fillRect(0, 60, tft.width(), tft.height() - 60, ILI9341_BLACK);
 
-  drawGauge(75, 100, "Temp", temperature);
+  drawGauge(75, 100, "Temp", temperature,50);
   drawGauge(220, 100, "Bat Volt", batteryVoltage, 30); // Adjust maxValue to 30
   drawGauge(75, 200, "Power", power);
-  drawGauge(220, 200, "Br Pr", brakePressure);
+  drawGauge(220, 200, "Br Pr", brakePressure,140);
 }
 
 void drawGauge(int x, int y, const char *label, int value, int maxValue)
