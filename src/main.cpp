@@ -280,10 +280,10 @@ void drawGauges()
 {
   tft.fillRect(0, 60, tft.width(), tft.height() - 60, ILI9341_BLACK);
 
-  drawGauge(75, 100, "Temp", temperature);
+  drawGauge(75, 100, "Temp", temperature,50);
   drawGauge(220, 100, "Bat Volt", batteryVoltage, 30); // Adjust maxValue to 30
   drawGauge(75, 200, "Power", power);
-  drawGauge(220, 200, "Br Pr", brakePressure);
+  drawGauge(220, 200, "Br Pr", brakePressure,140);
 }
 
 void drawGauge(int x, int y, const char *label, int value, int maxValue)
