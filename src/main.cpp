@@ -8,6 +8,7 @@
 #include "esp_freertos_hooks.h"
 #include "ESP32_CAN.h"
 
+
 // Declare a global mutex handle
 
 struct data
@@ -26,6 +27,12 @@ TWAI_Interface CAN1(1000, 4, 5); // argument 1 - BaudRate,  argument 2 - CAN_TX 
 SemaphoreHandle_t xMutex;
 
 QueueHandle_t display_Queue;
+
+// Declare the emergency variable
+uint8_t emergency = 0;
+
+// Create a queue handle
+QueueHandle_t emergencyQueue;
 
 #define TFT_DC 2
 #define TFT_CS 15
@@ -50,6 +57,21 @@ void drawStatus();
 void drawGauges();
 void drawGauge(int x, int y, const char *label, int value, int maxValue = 100);
 
+// Interrupt Service Routine
+void IRAM_ATTR emergencyISR() {
+  // Toggle the emergency variable
+  emergency ^= 1;
+  
+  // Send the variable to the queue
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  xQueueSendFromISR(emergencyQueue, &emergency, &xHigherPriorityTaskWoken);
+  
+  // Yield to higher priority task if necessary
+  if (xHigherPriorityTaskWoken) {
+    portYIELD_FROM_ISR();
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -60,6 +82,16 @@ void setup()
   // Create the mutex
   xMutex = xSemaphoreCreateMutex();
   display_Queue = xQueueCreate(1, sizeof(data));
+  
+  // Initialize the queue
+  emergencyQueue = xQueueCreate(10, sizeof(uint8_t));
+  
+  // Configure pin 16 as input with pulldown resistor
+  pinMode(16, INPUT_PULLDOWN);
+  
+  // Attach interrupt to pin 16
+  attachInterrupt(digitalPinToInterrupt(16), emergencyISR, CHANGE);
+  
   // Create tasks with increased stack size
   xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 1, NULL, 1); // Pin to core 1
   xTaskCreate(read_can, "read_can", 8192, NULL, 1, NULL);
@@ -71,7 +103,10 @@ void setup()
 
 void loop()
 {
-  // Empty loop
+  // Start the CAN sender task
+  vTaskDelete(NULL);
+  
+  // Other loop code...
 }
 
 void display_task(void *pvParameters)
@@ -134,6 +169,9 @@ void read_can(void *pvParameters)
           brakePressure = 0;
           brakePressure = (rxmessage[2] << 8) | rxmessage[3];
           brakePressure = brakePressure / 10;
+          if(brakePressure < 0){
+            brakePressure = 0;
+          }
           break;
         case 0x24:
           Serial.println("Received 0x24");
@@ -189,13 +227,22 @@ void send_can(void *pvParameters)
 {
   while (1)
   {
+    uint8_t emergencia = 0;
+    xQueueReceive(emergencyQueue, &emergencia, portMAX_DELAY);
     if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
     {
-      Serial.println("Sending CAN message");
-      CAN1.TXpacketBegin(0x44, 0);
-      CAN1.TXpacketLoad(0x01);
-      CAN1.TXpacketLoad(0x01);
-      CAN1.TXpackettransmit();
+      if(emergencia == 1){
+        CAN1.TXpacketBegin(0x502, 0);
+        CAN1.TXpacketLoad(0x04);
+        CAN1.TXpackettransmit();
+      }
+      else
+      {
+        CAN1.TXpacketBegin(0x502, 0);
+        CAN1.TXpacketLoad(0x00);
+        CAN1.TXpackettransmit();
+      }
+      
       xSemaphoreGive(xMutex);
     }
     vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -263,4 +310,15 @@ void drawGauge(int x, int y, const char *label, int value, int maxValue)
   tft.print(label);
   tft.print(":");
   tft.print(value);
+}
+
+void canSenderTask(void *pvParameters) {
+  uint8_t emergencyState;
+  while (1) {
+    // Wait for emergency variable from the queue
+    if (xQueueReceive(emergencyQueue, &emergencyState, portMAX_DELAY) == pdPASS) {
+      // Send emergencyState via CAN
+      // CAN sending code here...
+    }
+  }
 }
