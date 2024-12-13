@@ -146,6 +146,7 @@ void read_can(void *pvParameters)
           batteryVoltage = 0;
           temperature = 0;
           batteryVoltage = (rxmessage[0] << 8) | rxmessage[1];
+          batteryVoltage = batteryVoltage / 10;
           temperature = (rxmessage[2] << 8) | rxmessage[3];
           temperature = temperature / 10;
           break;
@@ -153,6 +154,12 @@ void read_can(void *pvParameters)
           send = 0;
           break;
         }
+
+        if (readyToDrive == false)
+        {
+          power = 0;
+        }
+        
 
         data_received.batteryVoltage = batteryVoltage;
         data_received.temperature = temperature;
@@ -209,11 +216,11 @@ void drawStatus()
   tft.setCursor(10, 10);
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
-  tft.print("R2D:");
+  tft.print("IGN:");
   tft.print(readyToDrive ? "ON" : "OFF");
 
   tft.setCursor(115, 10);
-  tft.print("IGN:");
+  tft.print("R2D:");
   tft.print(ignition ? "ON" : "OFF");
 
   tft.setCursor(220, 10);
