@@ -28,8 +28,7 @@ SemaphoreHandle_t xMutex;
 
 QueueHandle_t display_Queue;
 
-// Declare the emergency variable
-uint8_t emergency = 0;
+
 
 // Create a queue handle
 QueueHandle_t emergencyQueue;
@@ -57,15 +56,16 @@ bool myIdleHook(void);
 void drawStatus();
 void drawGauges();
 void drawGauge(int x, int y, const char *label, int value, int maxValue = 100);
-
+uint8_t emergenc = 0;
 // Interrupt Service Routine
 void IRAM_ATTR emergencyISR() {
   // Toggle the emergency variable
-  emergency ^= 1;
+  Serial.println("Emergency button pressed");
+  emergenc ^= 1;
   //Serial.println("Emergency button pressed");
   // Send the variable to the queue
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  xQueueSendFromISR(emergencyQueue, &emergency, &xHigherPriorityTaskWoken);
+  xQueueSendFromISR(emergencyQueue, &emergenc, &xHigherPriorityTaskWoken);
   
   // Yield to higher priority task if necessary
   if (xHigherPriorityTaskWoken) {
@@ -91,16 +91,17 @@ void setup()
   pinMode(16, INPUT);
   
   // Attach interrupt to pin 16
-  //attachInterrupt(digitalPinToInterrupt(16), emergencyISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(16), emergencyISR, FALLING);
   
   // Create tasks with increased stack size
-  xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 1, NULL, 1); // Pin to core 1
-  xTaskCreate(read_can, "read_can", 8192, NULL, 1, NULL);
+  //xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 3, NULL, 1); // Pin to core 1
+  xTaskCreate(display_task, "display_task", 8192, NULL, 3, NULL);
+  xTaskCreate(read_can, "read_can", 8192, NULL, 3, NULL);
   xTaskCreate(send_can, "send_can", 8192, NULL, 1, NULL);
-  xTaskCreate(button, "button", 8192, NULL, 1, NULL);
+  //xTaskCreate(button, "button", 8192, NULL, 1, NULL);
 
   // Register the custom idle hook
-  esp_register_freertos_idle_hook(myIdleHook);
+ // esp_register_freertos_idle_hook(myIdleHook);
 }
 
 void loop()
@@ -111,19 +112,6 @@ void loop()
   // Other loop code...
 }
 
-void button(void *pvParameters){
-
-  while(1){
-    if(digitalRead(16) == HIGH){
-      emergency = 1;
-    }
-    else{
-      emergency = 0;
-    }
-    xQueueSend(emergencyQueue, &emergency, portMAX_DELAY);
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-}
 
 void display_task(void *pvParameters)
 {
@@ -151,7 +139,7 @@ void display_task(void *pvParameters)
       drawGauges();
    // taskEXIT_CRITICAL(&spinlock);
   
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
@@ -166,7 +154,7 @@ void read_can(void *pvParameters)
     int send = 1;
     int id = 0;
     uint8_t rxmessage[8] = {0};
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    if (xSemaphoreTake(xMutex, pdMS_TO_TICKS(200)) == pdTRUE)
     {
       id = CAN1.RXpacketBegin();
       if (id == 0)
@@ -180,9 +168,6 @@ void read_can(void *pvParameters)
         {
           rxmessage[i] = CAN1.RXpacketRead(i);
         }
-        /*
-        if (prev_id != id || memcmp(rxmessage, prev_rxmessage, CAN_DLC) != 0)
-        {*/
         switch (id)
         {
         case 0x14:
@@ -234,15 +219,16 @@ void read_can(void *pvParameters)
         {
          // xQueueSend(display_Queue, &data_received, portMAX_DELAY);
          xQueueOverwrite(display_Queue, &data_received);
+         Serial.println("Data sent to display queue");
         }
 
-        prev_id = id;
+       prev_id = id;
         memcpy(prev_rxmessage, rxmessage, CAN_DLC);
         //}
       }
     }
     xSemaphoreGive(xMutex);
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
@@ -252,7 +238,7 @@ void send_can(void *pvParameters)
   {
     uint8_t emergencia = 0;
     xQueueReceive(emergencyQueue, &emergencia, portMAX_DELAY);
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    if(xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
     {
       if(emergencia == 1){
         CAN1.TXpacketBegin(0x502, 0);
@@ -265,8 +251,11 @@ void send_can(void *pvParameters)
         CAN1.TXpacketLoad(0x00);
         CAN1.TXpackettransmit();
       }
-      
+      CAN1.TXpacketBegin(0x504, 0);
+      CAN1.TXpacketLoad(0x50);
+      CAN1.TXpackettransmit();
       xSemaphoreGive(xMutex);
+      Serial.println("CAN message sent");
     }
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
@@ -305,8 +294,8 @@ void drawGauges()
 
   drawGauge(75, 100, "Temp", temperature,50);
   drawGauge(220, 100, "Bat Volt", batteryVoltage, 30); // Adjust maxValue to 30
-  drawGauge(75, 200, "Power", power);
-  drawGauge(220, 200, "Br Pr", brakePressure,140);
+  drawGauge(150, 200, "Power", power);
+  //drawGauge(220, 200, "Br Pr", brakePressure,140);
 }
 
 void drawGauge(int x, int y, const char *label, int value, int maxValue)
@@ -335,13 +324,4 @@ void drawGauge(int x, int y, const char *label, int value, int maxValue)
   tft.print(value);
 }
 
-void canSenderTask(void *pvParameters) {
-  uint8_t emergencyState;
-  while (1) {
-    // Wait for emergency variable from the queue
-    if (xQueueReceive(emergencyQueue, &emergencyState, portMAX_DELAY) == pdPASS) {
-      // Send emergencyState via CAN
-      // CAN sending code here...
-    }
-  }
-}
+
