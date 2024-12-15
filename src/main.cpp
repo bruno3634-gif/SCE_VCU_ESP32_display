@@ -43,7 +43,7 @@ int brakePressure = 50;
 void display_task(void *pvParameters);
 void read_can(void *pvParameters);
 void send_can(void *pvParameters);
-bool myIdleHook(void);
+
 
 // Forward declarations for display functions
 void drawStatus();
@@ -58,16 +58,14 @@ void setup()
   tft.fillScreen(ILI9341_BLACK);
   tft.setRotation(3);
 
-  // Create the mutex
+
   xMutex = xSemaphoreCreateMutex();
   display_Queue = xQueueCreate(1, sizeof(data));
-  // Create tasks with increased stack size
+
   xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 2, NULL, 1); // Pin to core 1
   xTaskCreate(read_can, "read_can", 8192, NULL, 3, NULL);
   xTaskCreate(send_can, "send_can", 8192, NULL, 1, NULL);
 
-  // Register the custom idle hook
-  esp_register_freertos_idle_hook(myIdleHook);
 }
 
 void loop()
@@ -213,12 +211,7 @@ void send_can(void *pvParameters)
   }
 }
 
-bool myIdleHook(void)
-{
-  static unsigned long idleCounter = 0;
-  idleCounter++;
-  return true;
-}
+
 
 void drawStatus()
 {
