@@ -52,6 +52,7 @@ void drawGauge(int x, int y, const char *label, int value, int maxValue = 100);
 
 void setup()
 {
+  pinMode(17,OUTPUT);
   Serial.begin(115200);
   tft.begin();
   tft.fillScreen(ILI9341_BLACK);
@@ -61,8 +62,8 @@ void setup()
   xMutex = xSemaphoreCreateMutex();
   display_Queue = xQueueCreate(1, sizeof(data));
   // Create tasks with increased stack size
-  xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 1, NULL, 1); // Pin to core 1
-  xTaskCreate(read_can, "read_can", 8192, NULL, 1, NULL);
+  xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 2, NULL, 1); // Pin to core 1
+  xTaskCreate(read_can, "read_can", 8192, NULL, 3, NULL);
   xTaskCreate(send_can, "send_can", 8192, NULL, 1, NULL);
 
   // Register the custom idle hook
@@ -76,6 +77,10 @@ void loop()
 
 void display_task(void *pvParameters)
 {
+  // Define desired temperature setpoint
+  const float setpoint = 50.0; // Set your desired temperature in Celsius
+  const float Kp = 5.0;        // Proportional gain (adjust as needed)
+
   while (1)
   {
     struct data data_received;
@@ -88,10 +93,19 @@ void display_task(void *pvParameters)
       readyToDrive = data_received.readyToDrive;
       ignition = data_received.ignition;
       fan = data_received.fan;
-    }
 
-    drawStatus();
-    drawGauges();
+      // Proportional control calculation
+      float error = temperature - setpoint;
+      int fanSpeed = static_cast<int>(error * Kp); // Calculate fan speed
+      fanSpeed = constrain(fanSpeed, 0, 255);      // Limit fanSpeed to 0-255
+
+      // Write PWM value to pin 17
+      analogWrite(17, fanSpeed);
+
+      // Update the display
+      drawStatus();
+      drawGauges();
+    }
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
@@ -146,6 +160,7 @@ void read_can(void *pvParameters)
           batteryVoltage = 0;
           temperature = 0;
           batteryVoltage = (rxmessage[0] << 8) | rxmessage[1];
+          batteryVoltage = batteryVoltage / 10;
           temperature = (rxmessage[2] << 8) | rxmessage[3];
           temperature = temperature / 10;
           break;
@@ -171,6 +186,9 @@ void read_can(void *pvParameters)
         prev_id = id;
         memcpy(prev_rxmessage, rxmessage, CAN_DLC);
         //}
+        int fanSpeed = map(temperature, 30, 40, 0, 255);
+        fanSpeed = constrain(fanSpeed, 0, 255);
+        analogWrite(17, fanSpeed);
       }
     }
     xSemaphoreGive(xMutex);
@@ -228,8 +246,8 @@ void drawGauges()
 
   drawGauge(75, 100, "Temp", temperature);
   drawGauge(220, 100, "Bat Volt", batteryVoltage, 30); // Adjust maxValue to 30
-  drawGauge(75, 200, "Power", power);
-  drawGauge(220, 200, "Br Pr", brakePressure);
+  drawGauge(150, 200, "Power", power);
+  //drawGauge(220, 200, "Br Pr", brakePressure);
 }
 
 void drawGauge(int x, int y, const char *label, int value, int maxValue)
