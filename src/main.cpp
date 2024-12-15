@@ -27,10 +27,15 @@ SemaphoreHandle_t xMutex;  // This mutex is used to protect the CAN bus
 
 QueueHandle_t display_Queue; // Queue to send data to the display task
 
+
+
+// Create a queue handle
+QueueHandle_t emergencyQueue;
+
 #define TFT_DC 2
 #define TFT_CS 15
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
-
+static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
 // Placeholder variables
 bool readyToDrive = false;
 bool ignition = false;
@@ -45,12 +50,29 @@ int brakePressure = 50;
 void display_task(void *pvParameters);
 void read_can(void *pvParameters);
 void send_can(void *pvParameters);
+bool myIdleHook(void);
 
 
 // Forward declarations for display functions
 void drawStatus();
 void drawGauges();
 void drawGauge(int x, int y, const char *label, int value, int maxValue = 100);
+uint8_t emergenc = 0;
+// Interrupt Service Routine
+void IRAM_ATTR emergencyISR() {
+  // Toggle the emergency variable
+  Serial.println("Emergency button pressed");
+  emergenc ^= 1;
+  //Serial.println("Emergency button pressed");
+  // Send the variable to the queue
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  xQueueSendFromISR(emergencyQueue, &emergenc, &xHigherPriorityTaskWoken);
+  
+  // Yield to higher priority task if necessary
+  if (xHigherPriorityTaskWoken) {
+    portYIELD_FROM_ISR();
+  }
+}
 
 void setup()
 {
@@ -67,6 +89,7 @@ void setup()
   xTaskCreatePinnedToCore(display_task, "display_task", 8192, NULL, 2, NULL, 1); // Pin to core 1
   xTaskCreate(read_can, "read_can", 8192, NULL, 3, NULL);
   xTaskCreate(send_can, "send_can", 8192, NULL, 1, NULL);
+  //xTaskCreate(button, "button", 8192, NULL, 1, NULL);
 
 }
 
@@ -97,6 +120,12 @@ void display_task(void *pvParameters)
       drawStatus();
       drawGauges();
     }
+    // Critical section
+   // taskENTER_CRITICAL(&spinlock);
+      brakePressure = data_received.brakePressure;
+      readyToDrive = data_received.readyToDrive;
+      ignition = data_received.ignition;
+      fan = data_received.fan;
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
@@ -113,7 +142,7 @@ void read_can(void *pvParameters)
     int send = 1;
     int id = 0;
     uint8_t rxmessage[8] = {0};
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    if (xSemaphoreTake(xMutex, pdMS_TO_TICKS(200)) == pdTRUE)
     {
       id = CAN1.RXpacketBegin();
       if (id == 0)
@@ -136,6 +165,9 @@ void read_can(void *pvParameters)
           brakePressure = 0;
           brakePressure = (rxmessage[2] << 8) | rxmessage[3];
           brakePressure = brakePressure / 10;
+          if(brakePressure < 0){
+            brakePressure = 0;
+          }
           break;
         case 0x24:
           Serial.println("Received 0x24");
@@ -157,6 +189,12 @@ void read_can(void *pvParameters)
           break;
         }
 
+        if (readyToDrive == false)
+        {
+          power = 0;
+        }
+        
+
         data_received.batteryVoltage = batteryVoltage;
         data_received.temperature = temperature;
         data_received.power = power;
@@ -172,9 +210,10 @@ void read_can(void *pvParameters)
         if (send == 1)
         {
          xQueueOverwrite(display_Queue, &data_received);
+         Serial.println("Data sent to display queue");
         }
 
-        prev_id = id;
+       prev_id = id;
         memcpy(prev_rxmessage, rxmessage, CAN_DLC);
         
       }
@@ -188,14 +227,26 @@ void send_can(void *pvParameters)
 {
   while (1)
   {
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    uint8_t emergencia = 0;
+    xQueueReceive(emergencyQueue, &emergencia, portMAX_DELAY);
+    if(xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
     {
-      Serial.println("Sending CAN message");
-      CAN1.TXpacketBegin(0x44, 0);
-      CAN1.TXpacketLoad(0x01);
-      CAN1.TXpacketLoad(0x01);
+      if(emergencia == 1){
+        CAN1.TXpacketBegin(0x502, 0);
+        CAN1.TXpacketLoad(0x04);
+        CAN1.TXpackettransmit();
+      }
+      else
+      {
+        CAN1.TXpacketBegin(0x502, 0);
+        CAN1.TXpacketLoad(0x00);
+        CAN1.TXpackettransmit();
+      }
+      CAN1.TXpacketBegin(0x504, 0);
+      CAN1.TXpacketLoad(0x50);
       CAN1.TXpackettransmit();
       xSemaphoreGive(xMutex);
+      Serial.println("CAN message sent");
     }
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
@@ -210,11 +261,11 @@ void drawStatus()
   tft.setCursor(10, 10);
   tft.setTextColor(ILI9341_WHITE);
   tft.setTextSize(2);
-  tft.print("R2D:");
+  tft.print("IGN:");
   tft.print(readyToDrive ? "ON" : "OFF");
 
   tft.setCursor(115, 10);
-  tft.print("IGN:");
+  tft.print("R2D:");
   tft.print(ignition ? "ON" : "OFF");
 
   tft.setCursor(220, 10);
@@ -227,7 +278,7 @@ void drawGauges()
 {
   tft.fillRect(0, 60, tft.width(), tft.height() - 60, ILI9341_BLACK);
 
-  drawGauge(75, 100, "Temp", temperature);
+  drawGauge(75, 100, "Temp", temperature,50);
   drawGauge(220, 100, "Bat Volt", batteryVoltage, 30); // Adjust maxValue to 30
   drawGauge(150, 200, "Power", power);
   //drawGauge(220, 200, "Br Pr", brakePressure);
@@ -258,3 +309,5 @@ void drawGauge(int x, int y, const char *label, int value, int maxValue)
   tft.print(":");
   tft.print(value);
 }
+
+
