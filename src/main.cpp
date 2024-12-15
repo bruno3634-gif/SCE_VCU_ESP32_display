@@ -8,7 +8,7 @@
 #include "esp_freertos_hooks.h"
 #include "ESP32_CAN.h"
 
-// Declare a global mutex handle
+  // Data structure to hold the data received from the CAN bus
 
 struct data
 {
@@ -23,9 +23,9 @@ struct data
 
 TWAI_Interface CAN1(1000, 4, 5); // argument 1 - BaudRate,  argument 2 - CAN_TX PIN,  argument 3 - CAN_RX PIN
 
-SemaphoreHandle_t xMutex;
+SemaphoreHandle_t xMutex;  // This mutex is used to protect the CAN bus
 
-QueueHandle_t display_Queue;
+QueueHandle_t display_Queue; // Queue to send data to the display task
 
 #define TFT_DC 2
 #define TFT_CS 15
@@ -39,6 +39,8 @@ int temperature = 75;
 int batteryVoltage = 12;
 int power = 60;
 int brakePressure = 50;
+
+// Function prototypes
 
 void display_task(void *pvParameters);
 void read_can(void *pvParameters);
@@ -73,15 +75,14 @@ void loop()
   vTaskDelete(NULL);
 }
 
+
+
 void display_task(void *pvParameters)
 {
-  // Define desired temperature setpoint
-  const float setpoint = 50.0; // Set your desired temperature in Celsius
-  const float Kp = 5.0;        // Proportional gain (adjust as needed)
-
+  struct data data_received;
   while (1)
   {
-    struct data data_received;
+    
     if (xQueueReceive(display_Queue, &data_received, portMAX_DELAY) == pdTRUE)
     {
       temperature = data_received.temperature;
@@ -91,14 +92,6 @@ void display_task(void *pvParameters)
       readyToDrive = data_received.readyToDrive;
       ignition = data_received.ignition;
       fan = data_received.fan;
-
-      // Proportional control calculation
-      float error = temperature - setpoint;
-      int fanSpeed = static_cast<int>(error * Kp); // Calculate fan speed
-      fanSpeed = constrain(fanSpeed, 0, 255);      // Limit fanSpeed to 0-255
-
-      // Write PWM value to pin 17
-      analogWrite(17, fanSpeed);
 
       // Update the display
       drawStatus();
@@ -134,9 +127,6 @@ void read_can(void *pvParameters)
         {
           rxmessage[i] = CAN1.RXpacketRead(i);
         }
-        /*
-        if (prev_id != id || memcmp(rxmessage, prev_rxmessage, CAN_DLC) != 0)
-        {*/
         switch (id)
         {
         case 0x14:
@@ -173,20 +163,20 @@ void read_can(void *pvParameters)
         data_received.brakePressure = brakePressure;
         data_received.readyToDrive = readyToDrive;
         data_received.ignition = ignition;
-        data_received.fan = fan;
+
+        int fanSpeed = map(temperature, 30, 40, 0, 255);
+        fanSpeed = constrain(fanSpeed, 0, 255);
+        analogWrite(17, fanSpeed);
+        data_received.fan = fanSpeed;
 
         if (send == 1)
         {
-         // xQueueSend(display_Queue, &data_received, portMAX_DELAY);
          xQueueOverwrite(display_Queue, &data_received);
         }
 
         prev_id = id;
         memcpy(prev_rxmessage, rxmessage, CAN_DLC);
-        //}
-        int fanSpeed = map(temperature, 30, 40, 0, 255);
-        fanSpeed = constrain(fanSpeed, 0, 255);
-        analogWrite(17, fanSpeed);
+        
       }
     }
     xSemaphoreGive(xMutex);
@@ -212,7 +202,7 @@ void send_can(void *pvParameters)
 }
 
 
-
+// Function to draw the status information on the display
 void drawStatus()
 {
   tft.fillRect(0, 0, tft.width(), 60, ILI9341_BLACK);
@@ -232,7 +222,7 @@ void drawStatus()
   tft.print(fan);
   tft.print("%");
 }
-
+//Function to draw the gauges on the display
 void drawGauges()
 {
   tft.fillRect(0, 60, tft.width(), tft.height() - 60, ILI9341_BLACK);
@@ -242,7 +232,7 @@ void drawGauges()
   drawGauge(150, 200, "Power", power);
   //drawGauge(220, 200, "Br Pr", brakePressure);
 }
-
+// Function to draw a gauge on the display
 void drawGauge(int x, int y, const char *label, int value, int maxValue)
 {
   int radius = 50;
